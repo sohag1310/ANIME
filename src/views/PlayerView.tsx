@@ -11,18 +11,15 @@ import { useState, useRef, useEffect } from "react";
 export const PlayerView = ({
   anime,
   episodeId: initialEpisode,
-  initialEpisodeUrl,
   onBack,
   onSelectAnime
 }: {
   anime: Anime;
   episodeId: number;
-  initialEpisodeUrl?: string;
   onBack: () => void;
   onSelectAnime?: (anime: Anime) => void;
 }) => {
   const [recommendations, setRecommendations] = useState<Anime[]>([]);
-  const [seriesEpisodes, setSeriesEpisodes] = useState<{ id: number; episode: number; title: string; url: string }[]>([]);
   const [currentEpisode, setCurrentEpisode] = useState(initialEpisode);
   const [currentDub, setCurrentDub] = useState<"SUB" | "DUB">("SUB");
   const [servers, setServers] = useState<{ name: string; url: string }[]>([]);
@@ -32,31 +29,8 @@ export const PlayerView = ({
   const [isAdded, setIsAdded] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Load series episodes if available
-  useEffect(() => {
-    let isMounted = true;
-    const fetchPath = anime.pageUrl || (anime.slug ? `/series/${anime.slug}` : "");
-    if (!fetchPath) return;
-
-    fetch(`/api/toonstream/series?url=${encodeURIComponent(fetchPath)}`)
-      .then(res => res.json())
-      .then(data => {
-        if (isMounted && data.success && data.episodes) {
-          setSeriesEpisodes(data.episodes);
-        }
-      })
-      .catch(console.error);
-
-    return () => { isMounted = false; };
-  }, [anime]);
-
-  const isMovie = anime.isMovie || anime.type === "Movie" || (anime.pageUrl && anime.pageUrl.includes("/movies/"));
-
-  const episodes = seriesEpisodes.length > 0
-    ? seriesEpisodes.map(e => e.episode)
-    : isMovie
-    ? [1]
-    : Array.from({ length: Math.min(Math.max((anime as any).episodes || 12, 12), 48) }).map((_, i) => i + 1);
+  const totalEpisodes = (anime as any).episodes || 24;
+  const episodes = Array.from({ length: Math.min(Math.max(totalEpisodes, 12), 48) }).map((_, i) => i + 1);
 
   // Load recommendations
   useEffect(() => {
@@ -78,27 +52,11 @@ export const PlayerView = ({
     let isMounted = true;
     setIsLoadingStream(true);
 
-    let targetEpUrl = "";
-    if (currentEpisode === initialEpisode && initialEpisodeUrl) {
-      targetEpUrl = initialEpisodeUrl;
-    } else {
-      const found = seriesEpisodes.find(e => e.episode === currentEpisode);
-      if (found && found.url) {
-        targetEpUrl = found.url;
-      } else if (anime.firstEpUrl) {
-        targetEpUrl = anime.firstEpUrl;
-      } else if (isMovie && anime.pageUrl) {
-        targetEpUrl = anime.pageUrl;
-      }
-    }
-
     const queryParams = new URLSearchParams({
       title: anime.title || "",
       titleEnglish: anime.title_english || "",
       episode: String(currentEpisode),
-      dub: currentDub,
-      slug: (anime as any).slug || "",
-      episodeUrl: targetEpUrl
+      dub: currentDub
     });
 
     fetch(`/api/toonstream/episode?${queryParams.toString()}`)
@@ -106,22 +64,32 @@ export const PlayerView = ({
       .then(data => {
         if (!isMounted) return;
         if (data.success && data.servers && data.servers.length > 0) {
-          const valid = data.servers.filter((s: any) => s.url && !s.url.endsWith(".json") && !s.url.includes("/api/"));
-          if (valid.length > 0) {
-            setServers(valid);
-            setSelectedServerIdx(0);
-            setDirectUrl(data.directUrl || "");
-            return;
-          }
+          setServers(data.servers);
+          setSelectedServerIdx(0);
+          setDirectUrl(data.directUrl || "");
+        } else if (data.directUrl) {
+          setServers([{ name: "ToonStream Direct", url: data.directUrl }]);
+          setSelectedServerIdx(0);
+          setDirectUrl(data.directUrl);
+        } else {
+          // Fallback direct URL format
+          const slug = anime.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+          const dubSuffix = currentDub === "DUB" ? "-dub" : "";
+          const fallback = `https://toonstream.vip/episode/${slug}-1x${currentEpisode}${dubSuffix}/`;
+          setServers([{ name: "ToonStream", url: fallback }]);
+          setSelectedServerIdx(0);
+          setDirectUrl(fallback);
         }
-        // If no valid embed servers found, keep servers empty so iframe never displays 404 raw JSON
-        setServers([]);
-        setDirectUrl(data.directUrl || "");
       })
       .catch(err => {
         console.error("Failed to load ToonStream episode:", err);
+        const slug = anime.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        const dubSuffix = currentDub === "DUB" ? "-dub" : "";
+        const fallback = `https://toonstream.vip/episode/${slug}-1x${currentEpisode}${dubSuffix}/`;
         if (isMounted) {
-          setServers([]);
+          setServers([{ name: "ToonStream", url: fallback }]);
+          setSelectedServerIdx(0);
+          setDirectUrl(fallback);
         }
       })
       .finally(() => {
@@ -129,7 +97,7 @@ export const PlayerView = ({
       });
 
     return () => { isMounted = false; };
-  }, [anime, currentEpisode, currentDub, seriesEpisodes, initialEpisodeUrl, initialEpisode]);
+  }, [anime, currentEpisode, currentDub]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -162,7 +130,7 @@ export const PlayerView = ({
           </button>
           <div className="min-w-0">
             <h2 className="text-white font-bold text-base md:text-xl line-clamp-1">{anime.title_english || anime.title}</h2>
-            <p className="text-xs text-primary font-medium">ToonStream • {isMovie ? "Full Movie" : `Episode ${currentEpisode}`}</p>
+            <p className="text-xs text-primary font-medium">ToonStream • Episode {currentEpisode}</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -197,31 +165,12 @@ export const PlayerView = ({
             />
           ) : (
             <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center text-white bg-zinc-950">
-              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary mb-3">
-                <Tv className="w-6 h-6" />
-              </div>
-              <h3 className="text-base font-bold text-white mb-1">ভিডিও প্লেয়ার সার্ভার লোড হচ্ছে বা খুঁজছে</h3>
-              <p className="text-xs text-gray-400 max-w-md mb-4">
-                অন্য সার্ভার দেখতে পারেন অথবা Sub / Dub পরিবর্তন করে পুনরায় চেষ্টা করতে পারেন।
-              </p>
-              <div className="flex flex-wrap items-center justify-center gap-3">
-                <button
-                  onClick={() => setCurrentDub(prev => prev === "SUB" ? "DUB" : "SUB")}
-                  className="bg-[#1f222a] border border-white/10 hover:bg-[#2a2e39] text-white font-semibold px-4 py-2 rounded-xl text-xs flex items-center gap-2 cursor-pointer transition-colors"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-primary" /> {currentDub === "SUB" ? "Dub এ দেখুন" : "Sub এ দেখুন"}
-                </button>
-                {directUrl && (
-                  <a
-                    href={directUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="bg-primary text-black font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 hover:scale-105 transition-transform"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" /> ToonStream এ দেখুন
-                  </a>
-                )}
-              </div>
+              <p className="text-sm text-gray-300 mb-3">ToonStream ভিডিও চালু করতে নিচের বাটনে চাপ দিন:</p>
+              {directUrl && (
+                <a href={directUrl} target="_blank" rel="noopener noreferrer" className="bg-primary text-black font-bold px-5 py-2.5 rounded-xl text-xs flex items-center gap-2 hover:scale-105 transition-transform">
+                  <ExternalLink className="w-4 h-4" /> ToonStream এ দেখুন
+                </a>
+              )}
             </div>
           )}
         </div>

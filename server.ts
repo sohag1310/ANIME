@@ -228,222 +228,101 @@ async function startServer() {
   // Route 6: ToonStream Episode and Player Resolver
   const toonstreamCache = new Map<string, any>();
 
-  const extractServersFromHtml = (html: string): { name: string; url: string }[] => {
-    const $ = cheerio.load(html);
-    const servers: { name: string; url: string }[] = [];
-
-    const btnLabels: string[] = [];
-    $(".aa-tbs-video .btn, .server-btn, .opt-server, [data-server]").each((_, b) => {
-      const text = $(b).text().replace(/\s+/g, " ").trim();
-      if (text) btnLabels.push(text);
-    });
-
-    $(".video-player .video iframe, #player iframe, iframe").each((i, el) => {
-      const src = $(el).attr("src") || $(el).attr("data-src");
-      if (
-        src &&
-        !src.includes("ads") &&
-        !src.includes("googletagmanager") &&
-        !src.includes("disqus") &&
-        !src.includes("google_ads") &&
-        !src.endsWith(".json") &&
-        !src.includes("/api/")
-      ) {
-        const cleanSrc = src.startsWith("//") ? `https:${src}` : src;
-        if (!cleanSrc.endsWith(".json")) {
-          const label = btnLabels[i] || `Server ${i + 1}`;
-          if (!servers.some(s => s.url === cleanSrc)) {
-            servers.push({ name: label, url: cleanSrc });
-          }
-        }
-      }
-    });
-
-    return servers;
-  };
-
   app.get("/api/toonstream/episode", async (req, res) => {
     try {
-      const episodeUrl = (req.query.episodeUrl as string) || "";
-      const customSlug = (req.query.slug as string) || "";
       const title = (req.query.title as string) || "";
       const titleEnglish = (req.query.titleEnglish as string) || "";
       const ep = parseInt((req.query.episode as string) || "1", 10) || 1;
       const dub = req.query.dub === "DUB";
+      const customSlug = (req.query.slug as string) || "";
 
-      const cacheKey = `${episodeUrl}_${customSlug}_${title}_${titleEnglish}_${ep}_${dub}`;
+      const cacheKey = `${title}_${titleEnglish}_${customSlug}_${ep}_${dub}`;
       if (toonstreamCache.has(cacheKey)) {
         res.json(toonstreamCache.get(cacheKey));
         return;
       }
 
-      let foundData: any = null;
-
-      // 1. Direct episode URL if provided
-      if (episodeUrl) {
-        const targetUrl = episodeUrl.startsWith("http")
-          ? episodeUrl
-          : `https://toonstream.vip${episodeUrl.startsWith('/') ? '' : '/'}${episodeUrl}`;
-        try {
-          const pageRes = await axios.get(targetUrl, {
-            headers: ANIME_HEADERS,
-            timeout: 7000
-          });
-          if (pageRes.status === 200 && pageRes.data && typeof pageRes.data === 'string' && String(pageRes.headers['content-type'] || '').includes('text/html')) {
-            const servers = extractServersFromHtml(pageRes.data);
-            if (servers.length > 0) {
-              foundData = {
-                success: true,
-                found: true,
-                directUrl: targetUrl,
-                slug: customSlug,
-                servers
-              };
-            }
-          }
-        } catch {
-          // Fall through to candidates
-        }
-      }
-
-      // 2. Slug candidates with unicode accent normalization
-      const normalize = (str: string) => {
-        return str
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toLowerCase();
-      };
-
+      // Generate candidate slugs
       const slugs = new Set<string>();
-      if (customSlug) {
-        const normCustom = normalize(customSlug).replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-        if (normCustom) {
-          slugs.add(normCustom);
-          slugs.add(normCustom.replace(/-(hindi-dub|hindi|dubbed|dub|sub)$/g, ""));
-          slugs.add(normCustom.replace(/-season-\d+/g, ""));
-        }
-      }
+      if (customSlug) slugs.add(customSlug);
 
       const titles = [titleEnglish, title].filter(Boolean);
       for (const t of titles) {
-        const norm = normalize(t);
-        const clean = norm.replace(/\(.*?\)/g, "").replace(/\[.*?\]/g, "");
-        const s1 = clean.replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-        if (s1) {
-          slugs.add(s1);
-          slugs.add(s1.replace(/-(hindi-dub|hindi|dubbed|dub|sub)$/g, ""));
-        }
+        const clean = t.replace(/\(.*?\)/g, "").replace(/\[.*?\]/g, "");
+        const s1 = clean.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        if (s1) slugs.add(s1);
 
         const noSeason = clean.replace(/season\s*\d+/i, "").replace(/part\s*\d+/i, "").replace(/\d+(st|nd|rd|th)\s*season/i, "");
-        const s2 = noSeason.replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-        if (s2) {
-          slugs.add(s2);
-          slugs.add(s2.replace(/-(hindi-dub|hindi|dubbed|dub|sub)$/g, ""));
-        }
+        const s2 = noSeason.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        if (s2) slugs.add(s2);
 
         const beforeColon = clean.split(/[:\-–]/)[0].trim();
-        const s3 = beforeColon.replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-        if (s3) {
-          slugs.add(s3);
-          slugs.add(s3.replace(/-(hindi-dub|hindi|dubbed|dub|sub)$/g, ""));
-        }
+        const s3 = beforeColon.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        if (s3) slugs.add(s3);
       }
 
-      const candidateList = Array.from(slugs).filter(Boolean);
+      const dubSuffix = dub ? "-dub" : "";
+      const candidateList = Array.from(slugs);
 
-      if (!foundData) {
-        for (const slug of candidateList) {
-          const targets = dub
-            ? [`https://toonstream.vip/episode/${slug}-1x${ep}-dub/`, `https://toonstream.vip/episode/${slug}-1x${ep}/`, `https://toonstream.vip/movies/${slug}/`]
-            : [`https://toonstream.vip/episode/${slug}-1x${ep}/`, `https://toonstream.vip/episode/${slug}-1x${ep}-sub/`, `https://toonstream.vip/movies/${slug}/`];
+      let foundData: any = null;
 
-          for (const targetUrl of targets) {
-            try {
-              const pageRes = await axios.get(targetUrl, {
-                headers: ANIME_HEADERS,
-                timeout: 5000
-              });
-
-              if (pageRes.status === 200 && pageRes.data && typeof pageRes.data === 'string' && String(pageRes.headers['content-type'] || '').includes('text/html')) {
-                const servers = extractServersFromHtml(pageRes.data);
-                if (servers.length > 0) {
-                  foundData = {
-                    success: true,
-                    found: true,
-                    directUrl: targetUrl,
-                    slug,
-                    servers
-                  };
-                  break;
-                }
-              }
-            } catch {
-              // try next
-            }
-          }
-          if (foundData) break;
-        }
-      }
-
-      // 3. Fallback: Search ToonStream directly for series page & episodes
-      if (!foundData && titles.length > 0) {
+      for (const slug of candidateList) {
+        const targetUrl = `https://toonstream.vip/episode/${slug}-1x${ep}${dubSuffix}/`;
         try {
-          const searchTitle = normalize(titles[0]).split(/[:\-–]/)[0].trim();
-          const searchRes = await axios.get(`https://toonstream.vip/s?q=${encodeURIComponent(searchTitle)}`, {
-            headers: ANIME_HEADERS,
+          const pageRes = await axios.get(targetUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            },
             timeout: 5000
           });
-          if (searchRes.status === 200 && typeof searchRes.data === 'string') {
-            const $s = cheerio.load(searchRes.data);
-            const firstSeriesLink = $s("article a.lnk-blk").first().attr("href") || $s("article a").first().attr("href");
-            if (firstSeriesLink) {
-              const seriesPageRes = await axios.get(firstSeriesLink, { headers: ANIME_HEADERS, timeout: 5000 });
-              if (seriesPageRes.status === 200 && typeof seriesPageRes.data === 'string') {
-                const $series = cheerio.load(seriesPageRes.data);
-                let matchedEpLink = "";
-                $series("a[href*='/episode/']").each((_, a) => {
-                  const href = $series(a).attr("href") || "";
-                  if (href.includes(`1x${ep}`) || href.includes(`-${ep}/`) || href.includes(`episode-${ep}`)) {
-                    matchedEpLink = href;
-                    return false;
-                  }
-                });
-                if (!matchedEpLink) {
-                  matchedEpLink = $series("a[href*='/episode/']").first().attr("href") || "";
-                }
-                if (matchedEpLink) {
-                  const epUrl = matchedEpLink.startsWith("http") ? matchedEpLink : `https://toonstream.vip${matchedEpLink.startsWith('/') ? '' : '/'}${matchedEpLink}`;
-                  const epPageRes = await axios.get(epUrl, { headers: ANIME_HEADERS, timeout: 5000 });
-                  if (epPageRes.status === 200 && typeof epPageRes.data === 'string' && String(epPageRes.headers['content-type'] || '').includes('text/html')) {
-                    const servers = extractServersFromHtml(epPageRes.data);
-                    if (servers.length > 0) {
-                      foundData = {
-                        success: true,
-                        found: true,
-                        directUrl: epUrl,
-                        slug: customSlug || candidateList[0] || "anime",
-                        servers
-                      };
-                    }
-                  }
+
+          if (pageRes.status === 200 && pageRes.data) {
+            const $ = cheerio.load(pageRes.data);
+            const servers: { name: string; url: string }[] = [];
+
+            const btnLabels: string[] = [];
+            $(".aa-tbs-video .btn, .server-btn, .opt-server").each((_, b) => {
+              const text = $(b).text().replace(/\s+/g, " ").trim();
+              if (text) btnLabels.push(text);
+            });
+
+            $(".video-player .video iframe, #player iframe, iframe").each((i, el) => {
+              const src = $(el).attr("src") || $(el).attr("data-src");
+              if (src && !src.includes("ads") && !src.includes("googletagmanager") && !src.includes("disqus") && !src.includes("google_ads")) {
+                const cleanSrc = src.startsWith("//") ? `https:${src}` : src;
+                const label = btnLabels[i] || `Server ${i + 1}`;
+                if (!servers.some(s => s.url === cleanSrc)) {
+                  servers.push({ name: label, url: cleanSrc });
                 }
               }
-            }
+            });
+
+            foundData = {
+              success: true,
+              found: true,
+              directUrl: targetUrl,
+              slug,
+              servers
+            };
+            break;
           }
         } catch {
-          // ignore search error
+          // Continue to next slug candidate
         }
       }
 
       const fallbackSlug = candidateList[0] || "anime";
-      const fallbackUrl = `https://toonstream.vip/episode/${fallbackSlug}-1x${ep}${dub ? "-dub" : ""}/`;
+      const fallbackUrl = `https://toonstream.vip/episode/${fallbackSlug}-1x${ep}${dubSuffix}/`;
 
       const responsePayload = foundData || {
         success: true,
         found: false,
         directUrl: fallbackUrl,
         slug: fallbackSlug,
-        servers: []
+        servers: [
+          { name: "ToonStream Direct", url: fallbackUrl }
+        ]
       };
 
       if (toonstreamCache.size > 200) toonstreamCache.clear();
@@ -459,102 +338,9 @@ async function startServer() {
     }
   });
 
-  // Route 7: ToonStream Anime Feed Scraper & Search with Video Availability Verification
+  // Route 7: ToonStream Anime Feed Scraper & Search
   const feedCache = new Map<string, { timestamp: number; data: any }>();
   const CACHE_TTL = 15 * 60 * 1000; // 15 mins
-
-  // In-memory verification cache: link -> { hasVideo, episodesCount, isMovie, firstEpUrl, checkedAt }
-  const verifiedAnimeCache = new Map<string, {
-    hasVideo: boolean;
-    episodesCount: number;
-    isMovie: boolean;
-    firstEpUrl?: string;
-    checkedAt: number;
-  }>();
-  const VERIFY_TTL = 30 * 60 * 1000; // 30 minutes
-
-  const verifyAnimeVideoAvailability = async (link: string): Promise<{
-    hasVideo: boolean;
-    episodesCount: number;
-    isMovie: boolean;
-    firstEpUrl?: string;
-  }> => {
-    const cached = verifiedAnimeCache.get(link);
-    if (cached && Date.now() - cached.checkedAt < VERIFY_TTL) {
-      return cached;
-    }
-
-    const targetUrl = link.startsWith("http")
-      ? link
-      : `https://toonstream.vip${link.startsWith('/') ? '' : '/'}${link}`;
-
-    try {
-      const pageRes = await axios.get(targetUrl, {
-        headers: ANIME_HEADERS,
-        timeout: 6000
-      });
-
-      if (pageRes.status !== 200 || !pageRes.data || typeof pageRes.data !== "string") {
-        const res = { hasVideo: false, episodesCount: 0, isMovie: false };
-        verifiedAnimeCache.set(link, { ...res, checkedAt: Date.now() });
-        return res;
-      }
-
-      const $ = cheerio.load(pageRes.data);
-      const epLinks: string[] = [];
-      $("a[href*=\"/episode/\"]").each((_, a) => {
-        const h = $(a).attr("href");
-        if (h && !epLinks.includes(h)) epLinks.push(h);
-      });
-
-      // 1. If it has series episode links: check first episode for working stream servers
-      if (epLinks.length > 0) {
-        const firstEp = epLinks[0].startsWith("http")
-          ? epLinks[0]
-          : `https://toonstream.vip${epLinks[0].startsWith('/') ? '' : '/'}${epLinks[0]}`;
-        try {
-          const epRes = await axios.get(firstEp, { headers: ANIME_HEADERS, timeout: 5000 });
-          if (epRes.status === 200 && epRes.data && typeof epRes.data === "string") {
-            const srvs = extractServersFromHtml(epRes.data);
-            if (srvs.length > 0) {
-              const res = { hasVideo: true, episodesCount: epLinks.length, isMovie: false, firstEpUrl: firstEp };
-              verifiedAnimeCache.set(link, { ...res, checkedAt: Date.now() });
-              return res;
-            }
-          }
-        } catch {
-          // Fall through
-        }
-        // If first episode had no servers, check direct page (e.g. embed on series page)
-        const directSrvs = extractServersFromHtml(pageRes.data);
-        if (directSrvs.length > 0) {
-          const res = { hasVideo: true, episodesCount: 1, isMovie: true, firstEpUrl: targetUrl };
-          verifiedAnimeCache.set(link, { ...res, checkedAt: Date.now() });
-          return res;
-        }
-        const res = { hasVideo: false, episodesCount: 0, isMovie: false };
-        verifiedAnimeCache.set(link, { ...res, checkedAt: Date.now() });
-        return res;
-      }
-
-      // 2. If no episode links, check if it is a movie with direct video servers on page
-      const directSrvs = extractServersFromHtml(pageRes.data);
-      if (directSrvs.length > 0) {
-        const res = { hasVideo: true, episodesCount: 1, isMovie: true, firstEpUrl: targetUrl };
-        verifiedAnimeCache.set(link, { ...res, checkedAt: Date.now() });
-        return res;
-      }
-
-      // No episode links and no video embed iframes found -> dead/empty poster
-      const res = { hasVideo: false, episodesCount: 0, isMovie: false };
-      verifiedAnimeCache.set(link, { ...res, checkedAt: Date.now() });
-      return res;
-    } catch {
-      const res = { hasVideo: false, episodesCount: 0, isMovie: false };
-      verifiedAnimeCache.set(link, { ...res, checkedAt: Date.now() });
-      return res;
-    }
-  };
 
   app.get("/api/toonstream/feed", async (req, res) => {
     try {
@@ -586,7 +372,7 @@ async function startServer() {
       });
 
       const $ = cheerio.load(response.data);
-      const rawAnimes: any[] = [];
+      const animes: any[] = [];
 
       $("article").each((_, el) => {
         const title = $(el).find(".entry-title, h2, h3").first().text().trim();
@@ -598,7 +384,7 @@ async function startServer() {
           const slug = link.replace(/\/$/, "").split("/").pop() || "";
           const largeImg = img.includes("/w") ? img.replace(/\/w\d+\//, "/w780/") : img;
 
-          rawAnimes.push({
+          animes.push({
             mal_id: slug || title.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
             slug,
             title,
@@ -618,38 +404,13 @@ async function startServer() {
         }
       });
 
-      // Concurrently verify video availability in batches of 6
-      const batchSize = 6;
-      const verifiedAnimes: any[] = [];
-      for (let i = 0; i < rawAnimes.length; i += batchSize) {
-        const chunk = rawAnimes.slice(i, i + batchSize);
-        const chunkResults = await Promise.all(chunk.map(async (item) => {
-          const v = await verifyAnimeVideoAvailability(item.pageUrl);
-          if (v.hasVideo) {
-            return {
-              ...item,
-              hasVideo: true,
-              isMovie: v.isMovie,
-              episodesCount: v.episodesCount,
-              firstEpUrl: v.firstEpUrl,
-              type: v.isMovie ? "Movie" : item.type
-            };
-          }
-          return null;
-        }));
-        for (const item of chunkResults) {
-          if (item) verifiedAnimes.push(item);
-        }
-      }
-
       const result = {
         success: true,
         page,
         totalPages: 47,
         category,
-        totalRaw: rawAnimes.length,
-        count: verifiedAnimes.length,
-        animes: verifiedAnimes
+        count: animes.length,
+        animes
       };
 
       if (feedCache.size > 200) feedCache.clear();
@@ -666,7 +427,7 @@ async function startServer() {
     }
   });
 
-  // Route 8: ToonStream Series Details & Episodes Scraper (with Movie support)
+  // Route 8: ToonStream Series Details & Episodes Scraper
   app.get("/api/toonstream/series", async (req, res) => {
     try {
       const urlPath = (req.query.url as string) || (req.query.slug ? `/series/${req.query.slug}` : "");
@@ -708,29 +469,12 @@ async function startServer() {
 
       episodes.sort((a, b) => a.episode - b.episode);
 
-      // If no episodes found with /episode/, check if this page is a Movie with direct video servers!
-      let isMovie = false;
-      if (episodes.length === 0) {
-        const directServers = extractServersFromHtml(response.data);
-        if (directServers.length > 0) {
-          isMovie = true;
-          episodes.push({
-            id: 1,
-            episode: 1,
-            title: "Full Movie",
-            url: targetUrl
-          });
-        }
-      }
-
       res.json({
         success: true,
         title,
         synopsis: desc,
         genres,
-        isMovie,
         episodesCount: episodes.length,
-        hasPlayableVideo: episodes.length > 0,
         episodes
       });
     } catch (err: any) {
