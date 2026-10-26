@@ -17,4 +17,8 @@ export interface Anime {
   year?: number | string;
   episodes?: number;
   genres?: string[];
+  firstEpUrl?: string;
+  isMovie?: boolean;
+  hasVideo?: boolean;
+  episodesCount?: number;
 }

@@ -106,6 +106,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'home' | 'calendar' | 'mylist' | 'download' | 'profile' | 'details' | 'player' | 'search' | 'admin'>('home');
   const [selectedAnime, setSelectedAnime] = useState<Anime | null>(null);
   const [selectedEpisode, setSelectedEpisode] = useState<number>(1);
+  const [selectedEpisodeUrl, setSelectedEpisodeUrl] = useState<string | undefined>(undefined);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [adminPassword, setAdminPassword] = useState<string>('');
   const [showAdminPrompt, setShowAdminPrompt] = useState(false);
@@ -141,11 +142,13 @@ export default function App() {
 
   const handleSelectAnime = (anime: Anime) => {
     setSelectedAnime(anime);
+    setSelectedEpisodeUrl(anime.firstEpUrl || undefined);
     setActiveTab('details');
   };
 
-  const handlePlayAnime = (episodeId: number) => {
+  const handlePlayAnime = (episodeId: number, episodeUrl?: string) => {
     setSelectedEpisode(episodeId);
+    setSelectedEpisodeUrl(episodeUrl);
     setActiveTab('player');
   };
 
@@ -157,7 +160,8 @@ export default function App() {
       try {
         const res = await fetch(`/api/toonstream/feed?page=${page}&category=${cat}`);
         const data = await res.json();
-        return (data.success && data.animes) ? data.animes : [];
+        const list = (data.success && data.animes) ? data.animes : [];
+        return list.filter((a: Anime) => a.hasVideo !== false);
       } catch (err) {
         console.error("ToonStream feed fetch error:", err);
         return [];
@@ -214,7 +218,7 @@ export default function App() {
       const res = await fetch(`/api/toonstream/feed?page=${page}&category=${cat}`);
       const data = await res.json();
       if (data.success && data.animes) {
-        setCatalogAnimes(data.animes);
+        setCatalogAnimes(data.animes.filter((a: Anime) => a.hasVideo !== false));
       }
     } catch (err) {
       console.error(err);
@@ -531,7 +535,13 @@ export default function App() {
             )}
 
             {activeTab === 'player' && selectedAnime && (
-              <PlayerView anime={selectedAnime} episodeId={selectedEpisode} onBack={() => setActiveTab('details')} onSelectAnime={handleSelectAnime} />
+              <PlayerView
+                anime={selectedAnime}
+                episodeId={selectedEpisode}
+                initialEpisodeUrl={selectedEpisodeUrl}
+                onBack={() => setActiveTab('details')}
+                onSelectAnime={handleSelectAnime}
+              />
             )}
 
             {activeTab === 'admin' && (
